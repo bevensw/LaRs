@@ -1,0 +1,1040 @@
+---
+title: "LaRs"
+author: "WB"
+date: "2024-05-09"
+output: html_document
+---
+## Set-up
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(haven)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(forcats)
+library(nnet)
+library(NHANES)
+library(MASS)
+library(naniar)
+library(Hmisc)
+library(mice)
+library(ggeffects)
+library(stringr)
+library(kableExtra)
+library(survey)
+library(purrr)
+library(RColorBrewer)
+library(gridExtra)
+library(ggbreak)
+library(vcd)
+library(plotme)
+library(wesanderson)
+### may need to install from github in the future "devtools::install_github("yogevherz/plotme")"
+## this package masks filter so be aware!!
+library(plotly)
+setwd("~/Documents/UCI/Analysis/LandRFinalreport/Clean-up")
+rm(list = ls())
+df_raw1 <- read.csv("Finalchunks.csv")
+```
+
+## Cleaning
+
+```{r cleaning WB}
+# rename variables
+df <- df_raw1
+
+df <- df %>%
+  mutate(reportnumber = case_when(
+    Report %in% c("Y1 Q1", "Y1 Q2") ~ "1.1/1.2",
+    Report %in% c("Y1 Q3", "Y1 Q4", "1") ~ "1.3/1.4",
+    Report %in% c("Y2 Q1", "Y2 Q2") ~ "2.1/2.2",
+    Report %in% c("Y2 Q3", "2") ~ "2.3/2.4",
+    Report == "Y3 Mid" ~ "3.2",
+    Report == "3" ~ "3.4",
+    Report == "Y4 Mid" ~ "4.2",
+    Report == "4" ~ "4.4",
+    Report == "Y5 Mid" ~ "5.2",
+    Report == "Y5" ~ "5.4",
+    TRUE ~ NA_character_  # In case there are other values in the Report column
+  ))
+
+df <- df %>% 
+  dplyr::rename(domain = WB.CFIR.domain,
+                construct = WB.CFIR.construct)
+
+# standardize the domain values as they are spelled differently, use capitalizations differently etc.
+
+df$domain <- ifelse(
+  str_detect(df$domain, "Imp"),
+  "Process",
+  df$domain
+)
+df$domain <- ifelse(
+  str_detect(df$domain, ("Ind|Ini")),
+  "Individuals",
+  df$domain
+)
+df$domain <- ifelse(
+  str_detect(df$domain, ("Inno")),
+  "Innovation",
+  df$domain
+)
+df$domain <- ifelse(
+  str_detect(df$domain, ("Inner")),
+  "Inner",
+  df$domain
+)
+df$domain <- ifelse(
+  str_detect(df$domain, ("Out")),
+  "Outer",
+  df$domain
+)
+
+## Seems that I have put a construct in the domain column for three chunks in row 657, 706 and 708:
+table(df$domain)
+which(df$domain=="Engaging")
+
+## I will just manually replace them with the appropriate domains and constructs but if there were more instances of this, it would probably be worth piping the response and looping to avoid errors. 
+
+df[668, 8] = "Process"
+df[668, 9] = "Engaging: Innovation recipients"
+df[717, 8] = "Process"
+df[717, 9] = "Engaging: Innovation recipients"
+df[719, 8] = "Process"
+df[719, 9] = "Engaging: Innovation recipients"
+
+# standardize the construct values as they are spelled differently, use capitalizations differently etc.
+replacements <- c(
+  "^Access$|^Access to Knowledge & Information$|^Access to knowledge & training$|^Access to Knowledge and Information$|^Access to knowledge and training$|^Access to knowledge & information$" = "Access to knowledge and information",
+  "^Adaptabilty$" = "Adaptability",
+  "^Asessing context$|^Assessing Context$" = "Assessing context",
+  "^Assessing needs: Implementation deliverers$|^Assessing needs\nInnovation deliverers$|^Assessing Needs: Innovation Deliverers$|^Assessing Needs: Innovation deliverers$|^Assessing needs: innovation deliverers$|^Assesing needs: Innovation deliverers$" = "Assessing needs: Innovation deliverers",
+  "^Assessing Needs: Innovation Recipeints$|^Assessing needs: innovation recipients$|^Assessing Needs: Implementation Recipients$|^Assessing Needs: innovation recipients$|^Assessing Needs: Innovation Recipients$|^Assessing Needs: Innovation recipients$|^Assessing needs: Innovation recipients$|^Assessing context: I$" = "Assessing needs: Innovation recipients",
+  "^Assessing Needs \\(no subconstruct\\)$" = "Assessing needs (no subconstruct)",
+  "^Available Resources$|^Available resources \\(no further subconstruct\\)$|^Available resources \\(no subconstructors\\)$|^Available resources$" = "Available resources (no subconstruct)",
+  "^Available Resources: Funding$" = "Available resources: Funding",
+  "^Crticial incidents$|^Critical Incidents$" = "Critical incidents",
+  "^Culture$" = "Culture (no subconstruct)",
+  "^Engaging: Implementation deliverers$|^Engaging: Innovaiton deliverers$|^Engaging: Innovation Deliverers$" = "Engaging: Innovation deliverers",
+  "^Engaging: Implementation recipients$|^Engaging: Innovaiton recipients$|^Engaging: Innovation Recipients$|^Engaging: INnovation Recipients$" = "Engaging: Innovation recipients",
+  "^Engaging$" = "Engaging (no subconstruct)",
+  "^Evidence-based$" = "Evidence-base",
+  "^High-Level Leaders$" = "High-level leaders",
+  "^Implementation deliverers$" = "Innovation deliverers",
+  "^Implementation Recipients$" = "Innovation recipients",
+  "^Implementation Facilitators$" = "Implementation facilitators",
+  "^Innovation Cost$" = "Cost",
+  "^Innovaiton recipients$|^Innovation Recipients$" = "Innovation recipients",
+  "^Innovation Deliverers$|^Innovation delieverers$" = "Innovation deliverers",
+  "^Local conditions$|^Local Conditions$" = "Local conditions",
+  "^Local Attitudes$" = "Local attitudes",
+  "^Innovation Design$" = "Design",
+  "^External Pressure$|^External Pressures$" = "External pressure",
+  "^Materials and equipment$|^Materials$" = "Materials & equipment",
+  "^MIssion Alignment$" = "Mission alignment",
+  "^PLanning$" = "Planning",
+  "^Partnership$" = "Partnerships & connections",
+  "^Other \\(Whoever vendors are…\\)$" = "Implementation facilitators",
+  "^Policies & Laws$" = "Policies & laws",
+  "^Refelcting & Evaluating Implementation$|^Reflecting & Evaluating\nImplementation$|^Reflecitng & Evaluating\nImplementation$|^Reflecting and Evalutating: Implementation$|^Reflecting & Evaulating: Implementation$|^Reflecting and Evaluting: Implementation$|^Reflection & Evaluation: Implementation$|^Reflecting & Evaluating: Implementation$|^Reflecting and evaluating: implementation$|^Reflecting and Evaluating: Implementation$|^Reflecting and evaluating: Implementation$|^Reflecting and evluating: implementation$|^Reflection and evaluation: implementation$|^Reflecting and evalauting: Implementation$|^Reflecting & Evaluating\\s*\\d*\\. Implementation$" = "Reflecting and evaluating: Implementation",
+  "^Reflection & Evaluation: Innovation$|^Reflecting and evaluating: Innovation$|^Reflecting & Evaluating\n2. Innovation$|^ Reflecting & Evaluating\nInnovation$|^Reflecting & Evaluating: innovation$|^Reflecting & Evaluating: Innovation$|^Reflecting & Evaluating\nInnovation$|^Reflecting and Evaluating: Innovation$|^Reflecting and evaluating: innovation$|^Reflecting and evalauting: Innovation$|^Reflecting and evluating: innovation$|^Reflection and evaluation: innovation$|^Reflecting and evaluating: Innovation  $|^Reflecting and evaluating \\(innovation\\)$" = "Reflecting and evaluating: Innovation",
+  "^Reflecting and evaluating$|^Reflecting and Evaluating$|^Reflecting & Evaluating$|^Reflecting and Evaluating \\(not sure which implementation or innovation - maybe both\\?\\)$" = "Reflecting and evaluating (no subconstruct)",
+  "^Relational Connections$" = "Relational connections",
+  "^Relative Advantage$" = "Relative advantage",
+  "^Structural characteristic: Work infrastructure$|^Structural Characteristics: Work Infrastrcuture$|^Structural Characteristics$|^Structural characteristics$|^Structural characteristics: Work Infrastructure$|^Structural Characteristics: Work Infrastructure$|^Structural characteristics: Work infrastucture$|^Structural charactersitics: Work infrastructure$|^Structrual characeristics\nWork infrastructure$|^Structural characterstics: Work infrastructure$|^Work Infrastructure$" = "Structural characteristics: Work infrastructure",
+  "^Structural characteristics: information Technology Infrastructure$|^Structural characteristics: Information Technology Infrastructure$|^Structural Characteristics: Information Technology Infrastructure$|^Structural characteristics: Informationt Technology infrastructure$|^Structural Characteristics: IT$" = "Structural characteristics: Information technology infrastructure",
+  "^Structural Characteristics: Physical infrastructure$|^Structural Characteristics: Physical$" = "Structural characteristics: Physical infrastructure",
+  "^Structural characteristics$|^Structural Characteristics$|^Structural characterstics$" = "Structural characteristics (no subconstruct)",
+  "^Taiiloring strategies$|^Tailoring Strategies$|^Tailoring$" = "Tailoring strategies",
+  "^Assessing Needs\\nInnovation Recipients$" = "Assessing needs (no subconstruct)",
+  "^Available Resources \\(no subconstruct\\)$" = "Available resources (no subconstruct)"
+)
+
+# Loop through the replacements and apply them
+for (pattern in names(replacements)) {
+  df$construct <- ifelse(
+    grepl(pattern, df$construct, ignore.case = TRUE),
+    replacements[[pattern]],
+    df$construct
+  )
+}
+
+## some constructs are weird and aren't playing nice with str_detect probably because of parentheses so will just be hard coding a replacement. 
+which(df$domain=="???")
+df[15, 9] = "Cost"
+df[208, 9] = "Implementation facilitators"
+which(df$construct=="Partnership")
+df[1148, 9] = "Partnerships & connections"
+which(df$construct=="Materials")
+df[2395,9] = "Materials & equipment"
+which(df$construct=="Process")
+df[1653,9] = "Planning"
+which(df$construct=="???")
+
+which(df$domain=="Assessing needs")
+df[301,8] ="Process"
+df[1214,9] ="Adapting"
+df[1266, 9] = "Teaming"
+
+which(df$domain=="Innovation" & df$construct=="Innovation recipients")
+df[1891, 8] = "Individuals"
+# clean for year
+df$year <- df$Report
+df$year <- gsub("^Y1.*", "1", df$year)
+df$year <- gsub("^Y2.*", "2", df$year)
+df$year <- gsub("^Y3.*", "3", df$year)
+df$year <- gsub("^Y4.*", "4", df$year)
+df$year <- gsub("^Y5.*", "5", df$year)
+
+```
+
+```{r cleaning SES}
+df <- df %>% 
+  dplyr::rename(domain2 = SE.CFIR.domain,
+                construct2 = SE.CFIR.construct)
+
+# standardize the domain values as they are spelled differently, use capitalizations differently etc.
+
+df$domain2 <- ifelse(
+  str_detect(df$domain2, "Imp|imp|IMp"),
+  "Process",
+  df$domain2
+)
+df$domain2 <- ifelse(
+  str_detect(df$domain2, ("Ind|Ini|IN")),
+  "Individuals",
+  df$domain2
+)
+df$domain2 <- ifelse(
+  str_detect(df$domain2, ("Inno")),
+  "Innovation",
+  df$domain2
+)
+df$domain2 <- ifelse(
+  str_detect(df$domain2, ("Inner")),
+  "Inner",
+  df$domain2
+)
+df$domain2 <- ifelse(
+  str_detect(df$domain2, ("Out")),
+  "Outer",
+  df$domain2
+)
+
+
+# standardize the construct values as they are spelled differently, use capitalizations differently etc.
+replacements <- c(
+  "^Access$|^Access to Knowledge & Information$|^Access to knowledge & training$|^Access to Knowledge and Information$|^Access to knowledge and training$|^Access to knowledge & information$" = "Access to knowledge and information",
+  "^Adaptabilty$" = "Adaptability",
+  "^Asessing context$|^Assessing Context$" = "Assessing context",
+  "^Assessing needs: Implementation deliverers$|^Assessing needs\nInnovation deliverers$|^Assessing Needs: Innovation Deliverers$|^Assessing Needs: Innovation deliverers$|^Assessing needs: innovation deliverers$|^Assesing needs: Innovation deliverers$" = "Assessing needs: Innovation deliverers",
+  "^Assessing Needs: Innovation Recipeints$|^Assessing needs: innovation recipients$|^Assessing Needs: Implementation Recipients$|^Assessing Needs: innovation recipients$|^Assessing Needs: Innovation Recipients$|^Assessing Needs: Innovation recipients$|^Assessing needs: Innovation recipients$|^Assessing context: I$" = "Assessing needs: Innovation recipients",
+  "^Assessing Needs \\(no subconstruct\\)$" = "Assessing needs (no subconstruct)",
+  "^Available Resources$|^Available resources \\(no further subconstruct\\)$|^Available resources \\(no subconstructors\\)$|^Available resources$" = "Available resources (no subconstruct)",
+  "^Available Resources: Funding$" = "Available resources: Funding",
+  "^Crticial incidents$|^Critical Incidents$" = "Critical incidents",
+  "^Culture$" = "Culture (no subconstruct)",
+  "^Engaging: Implementation deliverers$|^Engaging: Innovaiton deliverers$|^Engaging: Innovation Deliverers$" = "Engaging: Innovation deliverers",
+  "^Engaging: Implementation recipients$|^Engaging: Innovaiton recipients$|^Engaging: Innovation Recipients$|^Engaging: INnovation Recipients$" = "Engaging: Innovation recipients",
+  "^Engaging$" = "Engaging (no subconstruct)",
+  "^Evidence-based$" = "Evidence-base",
+  "^High-Level Leaders$" = "High-level leaders",
+  "^Implementation deliverers$" = "Innovation deliverers",
+  "^Implementation Recipients$" = "Innovation recipients",
+  "^Implementation Facilitators$" = "Implementation facilitators",
+  "^Innovation Cost$" = "Cost",
+  "^Innovaiton recipients$|^Innovation Recipients$" = "Innovation recipients",
+  "^Innovation Deliverers$|^Innovation delieverers$" = "Innovation deliverers",
+  "^Local conditions$|^Local Conditions$" = "Local conditions",
+  "^Local Attitudes$" = "Local attitudes",
+  "^Innovation Design$" = "Design",
+  "^External Pressure$|^External Pressures$" = "External pressure",
+  "^Materials and equipment$|^Materials$" = "Materials & equipment",
+  "^MIssion Alignment$" = "Mission alignment",
+  "^PLanning$" = "Planning",
+  "^Partnership$" = "Partnerships & connections",
+  "^Other \\(Whoever vendors are…\\)$" = "Implementation facilitators",
+  "^Policies & Laws$" = "Policies & laws",
+  "^Refelcting & Evaluating Implementation$|^Reflecting & Evaluating\nImplementation$|^Reflecitng & Evaluating\nImplementation$|^Reflecting and Evalutating: Implementation$|^Reflecting & Evaulating: Implementation$|^Reflecting and Evaluting: Implementation$|^Reflection & Evaluation: Implementation$|^Reflecting & Evaluating: Implementation$|^Reflecting and evaluating: implementation$|^Reflecting and Evaluating: Implementation$|^Reflecting and evaluating: Implementation$|^Reflecting and evluating: implementation$|^Reflection and evaluation: implementation$|^Reflecting and evalauting: Implementation$|^Reflecting & Evaluating\\s*\\d*\\. Implementation$" = "Reflecting and evaluating: Implementation",
+  "^Reflection & Evaluation: Innovation$|^Reflecting and evaluating: Innovation$|^Reflecting & Evaluating\n2. Innovation$|^ Reflecting & Evaluating\nInnovation$|^Reflecting & Evaluating: innovation$|^Reflecting & Evaluating: Innovation$|^Reflecting & Evaluating\nInnovation$|^Reflecting and Evaluating: Innovation$|^Reflecting and evaluating: innovation$|^Reflecting and evalauting: Innovation$|^Reflecting and evluating: innovation$|^Reflection and evaluation: innovation$|^Reflecting and evaluating: Innovation  $|^Reflecting and evaluating \\(innovation\\)$" = "Reflecting and evaluating: Innovation",
+  "^Reflecting and evaluating$|^Reflecting and Evaluating$|^Reflecting & Evaluating$|^Reflecting and Evaluating \\(not sure which implementation or innovation - maybe both\\?\\)$" = "Reflecting and evaluating (no subconstruct)",
+  "^Relational Connections$" = "Relational connections",
+  "^Relative Advantage$" = "Relative advantage",
+  "^Structural characteristic: Work infrastructure$|^Structural Characteristics: Work Infrastrcuture$|^Structural Characteristics$|^Structural characteristics$|^Structural characteristics: Work Infrastructure$|^Structural Characteristics: Work Infrastructure$|^Structural characteristics: Work infrastucture$|^Structural charactersitics: Work infrastructure$|^Structrual characeristics\nWork infrastructure$|^Structural characterstics: Work infrastructure$|^Work Infrastructure$" = "Structural characteristics: Work infrastructure",
+  "^Structural characteristics: information Technology Infrastructure$|^Structural characteristics: Information Technology Infrastructure$|^Structural Characteristics: Information Technology Infrastructure$|^Structural characteristics: Informationt Technology infrastructure$|^Structural Characteristics: IT$" = "Structural characteristics: Information technology infrastructure",
+  "^Structural Characteristics: Physical infrastructure$|^Structural Characteristics: Physical$" = "Structural characteristics: Physical infrastructure",
+  "^Structural characteristics$|^Structural Characteristics$|^Structural characterstics$" = "Structural characteristics (no subconstruct)",
+  "^Taiiloring strategies$|^Tailoring Strategies$|^Tailoring$" = "Tailoring strategies",
+  "^Assessing Needs\\nInnovation Recipients$" = "Assessing needs (no subconstruct)",
+  "^Available Resources \\(no subconstruct\\)$" = "Available resources (no subconstruct)"
+)
+
+# Loop through the replacements and apply them
+for (pattern in names(replacements)) {
+  df$construct2 <- ifelse(
+    grepl(pattern, df$construct2, ignore.case = TRUE),
+    replacements[[pattern]],
+    df$construct2
+  )
+}
+
+## manual cleanup
+which(df$construct2=="Adaptablility")
+df[343, 12] = "Adaptability"
+which(df$construct2=="Innovation Adaptability")
+df[1769, 12] = "Adaptability"
+which(df$construct2=="Innovation Cost")
+df[15, 12] = "Cost"
+which(df$construct2=="Materials & Equipment")
+df[2584,12] = "Materials & equipment"
+which(df$construct2=="Materials")
+df[2395,12] = "Materials & equipment"
+which(df$construct2=="Partnership")
+df[1148,12] = "Partnerships & connections"
+which(df$construct2=="Process")
+df[1653, 12] = "Planning"
+which(df$construct2=="Other (Whoever vendors are…)")
+df[208, 12] = "Implementation facilitators"
+which(df$construct2=="???")
+df[569, 12] = "Design"
+df[725, 12] = "Design"
+which(df$domain=="Innovation" & df$construct=="Innovation recipients")
+df[1891, 11] =="Individuals"
+
+```
+
+```{r cleaning Consensus}
+df <- df %>% 
+  dplyr::rename(condomain = Domain.Consensus,
+                conconstruct = Construct.Consensus)
+
+# standardize the domain values as they are spelled differently, use capitalizations differently etc.
+
+df$condomain <- ifelse(
+  str_detect(df$condomain, "Imp|imp|IMp"),
+  "Process",
+  df$condomain
+)
+df$condomain <- ifelse(
+  str_detect(df$condomain, ("Ind|Ini|IN")),
+  "Individuals",
+  df$condomain
+)
+df$condomain <- ifelse(
+  str_detect(df$condomain, ("Inno")),
+  "Innovation",
+  df$condomain
+)
+df$condomain <- ifelse(
+  str_detect(df$condomain, ("Inner")),
+  "Inner",
+  df$condomain
+)
+df$condomain <- ifelse(
+  str_detect(df$condomain, ("Out")),
+  "Outer",
+  df$condomain
+)
+
+which(df$condomain=="Engaging")
+df[717, 15] = "Process"
+df[717, 16] = "Engaging (no subconstruct)"
+df[719, 15] = "Process"
+df[719, 16] = "Engaging (no subconstruct)"
+
+# standardize the construct values as they are spelled differently, use capitalizations differently etc.
+replacements <- c(
+  "^Access$|^Access to Knowledge & Information$|^Access to knowledge & training$|^Access to Knowledge and Information$|^Access to knowledge and training$|^Access to knowledge & information$" = "Access to knowledge and information",
+  "^Adaptabilty$" = "Adaptability",
+  "^Asessing context$|^Assessing Context$" = "Assessing context",
+  "^Assessing needs: Implementation deliverers$|^Assessing needs\nInnovation deliverers$|^Assessing Needs: Innovation Deliverers$|^Assessing Needs: Innovation deliverers$|^Assessing needs: innovation deliverers$|^Assesing needs: Innovation deliverers$" = "Assessing needs: Innovation deliverers",
+  "^Assessing Needs: Innovation Recipeints$|^Assessing needs: innovation recipients$|^Assessing Needs: Implementation Recipients$|^Assessing Needs: innovation recipients$|^Assessing Needs: Innovation Recipients$|^Assessing Needs: Innovation recipients$|^Assessing needs: Innovation recipients$|^Assessing context: I$" = "Assessing needs: Innovation recipients",
+  "^Assessing Needs \\(no subconstruct\\)$" = "Assessing needs (no subconstruct)",
+  "^Available Resources$|^Available resources \\(no further subconstruct\\)$|^Available resources \\(no subconstructors\\)$|^Available resources$" = "Available resources (no subconstruct)",
+  "^Available Resources: Funding$" = "Available resources: Funding",
+  "^Crticial incidents$|^Critical Incidents$" = "Critical incidents",
+  "^Culture$" = "Culture (no subconstruct)",
+  "^Engaging: Implementation deliverers$|^Engaging: Innovaiton deliverers$|^Engaging: Innovation Deliverers$" = "Engaging: Innovation deliverers",
+  "^Engaging: Implementation recipients$|^Engaging: Innovaiton recipients$|^Engaging: Innovation Recipients$|^Engaging: INnovation Recipients$" = "Engaging: Innovation recipients",
+  "^Engaging$" = "Engaging (no subconstruct)",
+  "^Evidence-based$" = "Evidence-base",
+  "^High-Level Leaders$" = "High-level leaders",
+  "^Implementation deliverers$" = "Innovation deliverers",
+  "^Implementation Recipients$" = "Innovation recipients",
+  "^Implementation Facilitators$" = "Implementation facilitators",
+  "^Innovation Cost$" = "Cost",
+  "^Innovaiton recipients$|^Innovation Recipients$" = "Innovation recipients",
+  "^Innovation Deliverers$|^Innovation delieverers$" = "Innovation deliverers",
+  "^Local conditions$|^Local Conditions$" = "Local conditions",
+  "^Local Attitudes$" = "Local attitudes",
+  "^Innovation Design$" = "Design",
+  "^External Pressure$|^External Pressures$" = "External pressure",
+  "^Materials and equipment$|^Materials$" = "Materials & equipment",
+  "^MIssion Alignment$" = "Mission alignment",
+  "^PLanning$" = "Planning",
+  "^Partnership$" = "Partnerships & connections",
+  "^Other \\(Whoever vendors are…\\)$" = "Implementation facilitators",
+  "^Policies & Laws$" = "Policies & laws",
+  "^Refelcting & Evaluating Implementation$|^Reflecting & Evaluating\nImplementation$|^Reflecitng & Evaluating\nImplementation$|^Reflecting and Evalutating: Implementation$|^Reflecting & Evaulating: Implementation$|^Reflecting and Evaluting: Implementation$|^Reflection & Evaluation: Implementation$|^Reflecting & Evaluating: Implementation$|^Reflecting and evaluating: implementation$|^Reflecting and Evaluating: Implementation$|^Reflecting and evaluating: Implementation$|^Reflecting and evluating: implementation$|^Reflection and evaluation: implementation$|^Reflecting and evalauting: Implementation$|^Reflecting & Evaluating\\s*\\d*\\. Implementation$" = "Reflecting and evaluating: Implementation",
+  "^Reflection & Evaluation: Innovation$|^Reflecting and evaluating: Innovation$|^Reflecting & Evaluating\n2. Innovation$|^ Reflecting & Evaluating\nInnovation$|^Reflecting & Evaluating: innovation$|^Reflecting & Evaluating: Innovation$|^Reflecting & Evaluating\nInnovation$|^Reflecting and Evaluating: Innovation$|^Reflecting and evaluating: innovation$|^Reflecting and evalauting: Innovation$|^Reflecting and evluating: innovation$|^Reflection and evaluation: innovation$|^Reflecting and evaluating: Innovation  $|^Reflecting and evaluating \\(innovation\\)$" = "Reflecting and evaluating: Innovation",
+  "^Reflecting and evaluating$|^Reflecting and Evaluating$|^Reflecting & Evaluating$|^Reflecting and Evaluating \\(not sure which implementation or innovation - maybe both\\?\\)$" = "Reflecting and evaluating (no subconstruct)",
+  "^Relational Connections$" = "Relational connections",
+  "^Relative Advantage$" = "Relative advantage",
+  "^Structural characteristic: Work infrastructure$|^Structural Characteristics: Work Infrastrcuture$|^Structural Characteristics$|^Structural characteristics$|^Structural characteristics: Work Infrastructure$|^Structural Characteristics: Work Infrastructure$|^Structural characteristics: Work infrastucture$|^Structural charactersitics: Work infrastructure$|^Structrual characeristics\nWork infrastructure$|^Structural characterstics: Work infrastructure$|^Work Infrastructure$" = "Structural characteristics: Work infrastructure",
+  "^Structural characteristics: information Technology Infrastructure$|^Structural characteristics: Information Technology Infrastructure$|^Structural Characteristics: Information Technology Infrastructure$|^Structural characteristics: Informationt Technology infrastructure$|^Structural Characteristics: IT$" = "Structural characteristics: Information technology infrastructure",
+  "^Structural Characteristics: Physical infrastructure$|^Structural Characteristics: Physical$" = "Structural characteristics: Physical infrastructure",
+  "^Structural characteristics$|^Structural Characteristics$|^Structural characterstics$" = "Structural characteristics (no subconstruct)",
+  "^Taiiloring strategies$|^Tailoring Strategies$|^Tailoring$" = "Tailoring strategies",
+  "^Assessing Needs\\nInnovation Recipients$" = "Assessing needs (no subconstruct)",
+  "^Available Resources \\(no subconstruct\\)$" = "Available resources (no subconstruct)"
+)
+
+df <- df %>%
+  mutate(conconstruct = str_replace_all(conconstruct, replacements))
+
+## cleaning Heading to ensure we can correctly differentiate between learnings and recommendations:
+replacements2 <- c("Barriers to Adoption and Use of Help@Hand Technologies|Facilitators to Adoption and Use of Help@Hand Technologies|Community members see the potential value of using mental health technologies|Addressing usability concerns will be critical for encouraging the adoption and continued use of these technologies." = "Learning")
+
+df[23, 16] = "Reflecting and evaluating: Innovation"
+
+which(df$condomain == "Innovation" & df$conconstruct == "Innovation recipients")
+which(df$condomain == "Inner" & df$conconstruct == "Innovation recipients")
+which(df$condomain == "Process" & df$conconstruct == "Process")
+which(df$condomain == "Process" & df$conconstruct == "Communications")
+which(df$condomain == "Process" & df$conconstruct == "Adaptability")
+which(df$condomain == "Process" & df$conconstruct == "Assessing context: Innovation deliverers")
+which(df$condomain == "Inner" & df$conconstruct == "Local conditions")
+
+
+df[328, 16] = "Assessing context"
+df[1122, 16] = "Adapting"
+df[1165, 16] = "Teaming"
+df[1702, 16] = "Planning"
+df[1702, 15] = "Individuals"
+df[2048, 15] = "Individuals"
+df[2370, 15] = "Outer"
+
+## IS A STOP GAP BEFORE RECODING MISSING VALUES
+values_to_drop <- c("", " ", "?", "??", "???")
+df <- df[!(df$year %in% values_to_drop), ]
+df <- df[!(df$domain %in% values_to_drop), ]
+df <- df[!(df$domain2 %in% values_to_drop), ]
+df <- df[!(df$construct %in% values_to_drop), ]
+df <- df[!(df$construct2 %in% values_to_drop), ]
+df <- df[df$condomain %in% c('Inner', 'Innovation', 'Outer', 'Process', 'Individuals'), ]
+df <- df %>% 
+    dplyr::filter(conconstruct!="")
+```
+## Visualization 
+
+```{r calcs, echo=FALSE}
+## check for length of learnings and recommendations 
+df$length <- str_count(df$Heading.1, "\\w+")
+df$char_count <- nchar(df$Heading.1)
+
+df$charperword <- df$char_count/df$length
+
+df %>%
+    group_by(year) %>%
+    summarise(mean = mean(length)) %>%
+    ggplot(aes(x = year, y = mean, color=year)) +
+    geom_point(size=3) +
+    geom_line() +
+    labs(title = "Average words per learning/recommendation by year", x = "Year", y = "Mean Words per L&R") + theme_bw()
+
+df %>%
+    group_by(year) %>%
+    summarise(mean = mean(char_count)) %>%
+    ggplot(aes(x = year, y = mean, color=year, group = 1)) +  # group = 1 ensures all points are treated as part of the same group
+    geom_line() +
+    geom_point(size=3) +
+    labs(title = "Average characters per learning/recommendation by year", x = "Year", y = "Mean chars per L&R") +
+    theme_bw()
+
+#1. Pie chart domain props combined across years
+pieplot <- df %>%
+  count(condomain) %>%
+  mutate(percentage = n / sum(n) * 100) %>%
+  ggplot(aes(x = "", y = percentage, fill = condomain)) +
+  geom_bar(stat = "identity", width = 1, show.legend = FALSE) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values=c("#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#005f73"),
+                    name = "condomain",
+                    labels = c('Individuals', 'Inner setting', 'Innovation', 'Outer setting', 'Implementation\n Process')) +
+  labs(title = "a") +
+  geom_text(aes(label = paste0(round(percentage), "%")), position = position_stack(vjust = 0.5), size = 8) 
+
+
+
+#2a. condomain count and props by year. 
+df %>% 
+ggplot(., aes(x = year, fill = condomain)) +
+    geom_bar() + theme_bw() + scale_fill_brewer(palette = "Pastel1") + labs(title="condomain counts across years")
+
+df %>% 
+ggplot(., aes(x = year, fill = condomain)) +
+    geom_bar(position = "fill") + theme_bw() + scale_fill_brewer(palette = "Pastel1") + labs(y="Prop", title="condomain proportions across years")
+
+##domains by year with legend.
+plot1 <- df %>% 
+ggplot(., aes(x = year, fill = condomain)) +
+    geom_bar(position = "fill") + theme_minimal() + scale_fill_manual(values=c("#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#005f73"), labels = c('Individuals', 'Inner setting', 'Innovation', 'Outer setting', 'Implementation\n Process')) + labs(x = "Year", y="Prop", title="b") +
+  guides(fill = guide_legend(title = "Domain"))
+
+## by report with legend
+plot2 <- df %>% 
+    ggplot(., aes(x = reportnumber, fill = condomain)) +
+    geom_bar(position = "fill") + theme_bw() + scale_fill_manual(values=c("#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#005f73"), labels = c('Individuals', 'Inner setting', 'Innovation', 'Outer setting', 'Implementation\n Process')) + labs(x = "Report", y="Proportion", title="Domain proportions across reports")+ theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+    geom_vline(xintercept = 4.5, linetype = "dashed", color = "red") +
+    annotate("text", x = 4.5, y = 0.68, label = "December 2020", color = "red", angle = 90, vjust = -0.5) + guides(fill=guide_legend(title="Domain"))
+
+
+#2b. condomains props by year. 
+p1 <-df %>%
+    filter(year==1) %>% 
+    count(condomain) %>%
+    mutate(percentage = n / sum(n) * 100) %>%
+    ggplot(aes(x = "", y = percentage, fill = condomain)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    scale_fill_brewer(palette = "Pastel1", name = "condomain") +
+    scale_fill_manual(values=c("#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#005f73"), labels = c('Individuals', 'Inner setting', 'Innovation', 'Outer setting', 'Implementation\n Process')) +
+    labs(title = "Percentage of Each condomain Year 1") +
+    geom_text(aes(label = paste0(round(percentage), "%")), position = position_stack(vjust = 0.5)) +
+    guides(condomain = guide_legend(title = "condomain"))
+
+### bar graph
+df %>%
+    filter(year == 1) %>%
+    count(condomain) %>%
+    mutate(percentage = n / sum(n) * 100) %>%
+    mutate(condomain = reorder(condomain, -percentage)) %>%
+    ggplot(aes(x = condomain, y = percentage, fill = condomain)) +
+    geom_bar(stat = "identity") + 
+    geom_text(aes(label = sprintf("%.0f%%", percentage)), vjust = -0.5, size = 5) + # Add percentages above bars with no decimal places
+    theme_minimal() + 
+    scale_fill_manual(values = c("#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#005f73")) + 
+    scale_x_discrete(labels = c('Individuals' = 'People\n involved', 
+                                'Inner' = 'Implementation\n sites', 
+                                'Innovation' = 'Technologies', 
+                                'Outer' = 'Public\n perception,\n policies,\n events', 
+                                'Process' = 'Activities &\n strategies')) + 
+    labs(x = NULL, y = NULL) +
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 25, hjust = 1), axis.text.y=element_blank(), text = element_text(size = 18), panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+
+p2 <- df %>%
+    filter(year==2) %>% 
+    count(condomain) %>%
+    mutate(percentage = n / sum(n) * 100) %>%
+    ggplot(aes(x = "", y = percentage, fill = condomain)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    scale_fill_brewer(palette = "Pastel1", name = "condomain") +
+    labs(title = "Percentage of Each condomain Year 2") +
+    geom_text(aes(label = paste0(round(percentage), "%")), position = position_stack(vjust = 0.5)) +
+    guides(condomain = guide_legend(title = "condomain")) 
+
+df %>%
+    filter(year == 2) %>%
+    count(condomain) %>%
+    mutate(percentage = n / sum(n) * 100) %>%
+    mutate(condomain = reorder(condomain, -percentage)) %>%
+    ggplot(aes(x = condomain, y = percentage, fill = condomain)) +
+    geom_bar(stat = "identity") + 
+    geom_text(aes(label = sprintf("%.0f%%", percentage)), vjust = -0.5, size = 5) + # Add percentages above bars with no decimal places
+    theme_minimal() + 
+    scale_fill_manual(values = c("#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#005f73")) + 
+    scale_x_discrete(labels = c('Individuals' = 'People\n involved', 
+                                'Inner' = 'Implementation\n sites', 
+                                'Innovation' = 'Technologies', 
+                                'Outer' = 'Public\n perception,\n policies,\n events', 
+                                'Process' = 'Activities &\n strategies')) + 
+    labs(x = NULL, y = NULL) +
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 25, hjust = 1), axis.text.y=element_blank(), text = element_text(size = 18), panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+p3 <- df %>%
+    filter(year==3) %>% 
+    count(condomain) %>%
+    mutate(percentage = n / sum(n) * 100) %>%
+    ggplot(aes(x = "", y = percentage, fill = condomain)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    scale_fill_brewer(palette = "Pastel1", name = "condomain") +
+    labs(title = "Percentage of Each condomain Year 3") +
+    geom_text(aes(label = paste0(round(percentage), "%")), position = position_stack(vjust = 0.5)) +
+    guides(condomain = guide_legend(title = "condomain")) 
+
+df %>%
+    filter(year == 3) %>%
+    count(condomain) %>%
+    mutate(percentage = n / sum(n) * 100) %>%
+    mutate(condomain = reorder(condomain, -percentage)) %>%
+    ggplot(aes(x = condomain, y = percentage, fill = condomain)) +
+    geom_bar(stat = "identity") + 
+    geom_text(aes(label = sprintf("%.0f%%", percentage)), vjust = -0.5, size = 5) + # Add percentages above bars with no decimal places
+    theme_minimal() + 
+    scale_fill_manual(values = c("#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#005f73")) + 
+    scale_x_discrete(labels = c('Individuals' = 'People\n involved', 
+                                'Inner' = 'Implementation\n sites', 
+                                'Innovation' = 'Technologies', 
+                                'Outer' = 'Public\n perception,\n policies,\n events', 
+                                'Process' = 'Activities &\n strategies')) + 
+    labs(x = NULL, y = NULL) +
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 25, hjust = 1), axis.text.y=element_blank(), text = element_text(size = 18), panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+p4 <- df %>%
+    filter(year==4) %>% 
+    count(condomain) %>%
+    mutate(percentage = n / sum(n) * 100) %>%
+    ggplot(aes(x = "", y = percentage, fill = condomain)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    scale_fill_brewer(palette = "Pastel1", name = "condomain") +
+    labs(title = "Percentage of Each condomain Year 4") +
+    geom_text(aes(label = paste0(round(percentage), "%")), position = position_stack(vjust = 0.5)) +
+    guides(condomain = guide_legend(title = "condomain")) 
+
+df %>%
+    filter(year == 4) %>%
+    count(condomain) %>%
+    mutate(percentage = n / sum(n) * 100) %>%
+    mutate(condomain = reorder(condomain, -percentage)) %>%
+    ggplot(aes(x = condomain, y = percentage, fill = condomain)) +
+    geom_bar(stat = "identity") + 
+    geom_text(aes(label = sprintf("%.0f%%", percentage)), vjust = -0.5, size = 5) + # Add percentages above bars with no decimal places
+    theme_minimal() + 
+    scale_fill_manual(values = c("#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#005f73")) + 
+    scale_x_discrete(labels = c('Individuals' = 'People\n involved', 
+                                'Inner' = 'Implementation\n sites', 
+                                'Innovation' = 'Technologies', 
+                                'Outer' = 'Public\n perception,\n policies,\n events', 
+                                'Process' = 'Activities &\n strategies')) + 
+    labs(x = NULL, y = NULL) +
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 25, hjust = 1), axis.text.y=element_blank(), text = element_text(size = 18), panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+p5 <- df %>%
+    filter(year==5) %>% 
+    count(condomain) %>%
+    mutate(percentage = n / sum(n) * 100) %>%
+    ggplot(aes(x = "", y = percentage, fill = condomain)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    scale_fill_brewer(palette = "Pastel1", name = "condomain") +
+    labs(title = "Percentage of Each condomain Year 5") +
+    geom_text(aes(label = paste0(round(percentage), "%")), position = position_stack(vjust = 0.5)) +
+    guides(condomain = guide_legend(title = "condomain")) 
+
+df %>%
+    filter(year == 5) %>%
+    count(condomain) %>%
+    mutate(percentage = n / sum(n) * 100) %>%
+    mutate(condomain = reorder(condomain, -percentage)) %>%
+    ggplot(aes(x = condomain, y = percentage, fill = condomain)) +
+    geom_bar(stat = "identity") + 
+    geom_text(aes(label = sprintf("%.0f%%", percentage)), vjust = -0.5, size = 5) + # Add percentages above bars with no decimal places
+    theme_minimal() + 
+    scale_fill_manual(values = c("#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#005f73")) + 
+    scale_x_discrete(labels = c('Individuals' = 'People\n involved', 
+                                'Inner' = 'Implementation\n sites', 
+                                'Innovation' = 'Technologies', 
+                                'Outer' = 'Public\n perception,\n policies,\n events', 
+                                'Process' = 'Activities &\n strategies')) + 
+    labs(x = NULL, y = NULL) +
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 25, hjust = 1), axis.text.y=element_blank(), text = element_text(size = 18), panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+p1
+p2
+p3
+p4
+p5
+combined_plots <- p1 + p2 + p3 + p4 + p5
+combined_plots
+#3. 
+d1 <- df %>%
+    group_by(year, condomain) %>%
+    summarise(count = n()) %>%
+    group_by(year) %>%
+    mutate(proportion = count / sum(count)) %>%
+    ggplot(aes(x = year, y = proportion, group = condomain, color = condomain)) +
+    geom_line() +
+    scale_colour_brewer(palette = "Set1", name = "condomain") +
+    labs(title = "Proportion of domains by year",
+         x = "Year", y = "Proportion",
+         color = "condomain") +
+  geom_point() +
+  scale_y_break(c(0.2, 0.55), scale=1, space=0)+
+  theme_bw()
+
+#3b change from previous year proportion
+df2 <- df %>%
+    group_by(year, condomain) %>%
+    summarise(count = n()) %>%
+    group_by(year) %>%
+    mutate(proportion = count / sum(count)) %>% 
+    ungroup() %>%
+    arrange(condomain, year) %>%
+    group_by(condomain) %>%
+    mutate(proportion_change = ifelse(year == 1, 0, proportion / lag(proportion) - 1))
+d2 <-ggplot(df2, aes(x = year, y = proportion_change, group = condomain, color = condomain)) +
+    geom_line() +
+    labs(x = "Year", y = "Δ", title = "Change in proportion of condomains from previous year") +
+  geom_point(size=3) +
+  theme_bw()
+
+#3c change in proportion from year 1
+df3 <- df %>%
+  group_by(year, condomain) %>%
+  summarise(count = n()) %>%
+  group_by(year) %>%
+  mutate(proportion = count / sum(count)) %>% 
+  ungroup() %>%
+  arrange(condomain, year) %>%
+  group_by(condomain) %>%
+  mutate(proportion_change = proportion / first(proportion) - 1)
+
+d3 <- ggplot(df3, aes(x = year, y = proportion_change, group = condomain, color = condomain)) +
+    geom_line() +
+    geom_point(size=3) +
+    labs(x = "Year", y = "Δ", title = "Change in proportion of condomain per year from baseline") +
+    theme_bw()
+
+#3d
+overall_proportions <- df %>%
+  group_by(condomain) %>%
+  summarise(count = n()) %>%
+  mutate(overall_proportion = count / sum(count))
+yearly_proportions <- df %>%
+  group_by(year, condomain) %>%
+  summarise(count = n()) %>%
+  mutate(yearly_proportion = count / sum(count))
+combined_df <- yearly_proportions %>%
+  left_join(overall_proportions, by = "condomain") %>%
+  mutate(proportion_ratio = (yearly_proportion / overall_proportion)-1)
+
+d4 <- ggplot(combined_df, aes(x = year, y = proportion_ratio, group = condomain, color = condomain)) +
+    geom_line() +
+    geom_point(size=4) +
+    labs(x = "Year", y = "Change", title = "", color = "Domain") +
+    scale_color_manual(values=c("#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#005f73"), 
+                       labels = c('Individuals', 'Inner setting', 'Innovation', 'Outer setting', 'Implementation\n Process')) +
+    theme_bw() +
+    theme(
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        legend.title = element_text(size = 16),
+        legend.text = element_text(size = 14),
+        plot.title = element_text(size = 18)
+    )
+
+combined_plots2 <- plot1+d4
+combined_plots2
+
+combined_plots3 <- pieplot+plot1
+combined_plots3
+
+#4. 
+df %>%
+    group_by(condomain, conconstruct) %>%
+    summarise(count = n()) %>%
+    mutate(percentage = (count / nrow(df)) * 100,
+           condomain = first(condomain)) %>%
+    arrange(condomain, conconstruct) %>%
+    print(n = 60)
+
+# conconstructs by condomain
+df %>%
+    filter(condomain == "Process") %>%
+    group_by(conconstruct, year) %>%
+    summarise(count = n()) %>% 
+    arrange(year, desc(count))
+
+df %>%
+  filter(condomain == "Process") %>%
+  ggplot(aes(x = year, fill = conconstruct))+
+  geom_bar(position="fill") + theme_bw() + labs(title="condomain: Implementation Process", y="prop")
+
+df %>%
+    filter(condomain == "Individuals") %>%
+    group_by(conconstruct, year) %>%
+    summarise(count = n()) %>%
+    group_by(year) %>%
+    mutate(percentage = count / sum(count) * 100) %>%
+    arrange(year)
+
+df %>%
+  filter(condomain == "Individuals") %>%
+  ggplot(aes(x = year, fill = conconstruct))+
+  geom_bar(position="fill") + ylab("prop") + theme_bw() + scale_fill_brewer(palette = "Pastel1") + labs(title="condomain: Individuals", y="prop")
+
+df_individuals <- df %>% 
+    filter(condomain=="Individuals")
+conconstruct_labels <- c("High-level leaders",
+                        "Implementation facilitators",
+                        "Innovation deliverers",
+                        "Innovation recipients")
+df_individuals$conconstruct <- factor(df_individuals$conconstruct, levels = conconstruct_labels)
+df_individuals %>%
+  ggplot(aes(x = year, fill = conconstruct))+
+  geom_bar(position="fill") + ylab("prop") + theme_bw() + scale_fill_brewer(palette = "Pastel1") + labs(title="condomain: Individuals", y="prop")
+
+
+df %>%
+  filter(condomain == "Innovation") %>%
+  ggplot(aes(x = year, fill = conconstruct))+
+  geom_bar(position="fill") + ylab("prop") + theme_bw() + scale_fill_brewer(palette = "Pastel1") + labs(title="condomain: Innovation", y="prop")
+
+df_innovation <- df %>% 
+    filter(condomain=="Innovation")
+conconstruct_labels <- c("Adaptability",
+                        "Complexity",
+                        "Cost",
+                        "Design",
+                        "Evidence-base",
+                        "Innovation recipients",
+                        "Relative advantage",
+                        "Source")
+df_innovation$conconstruct <- factor(df_innovation$conconstruct, levels = conconstruct_labels)
+
+df %>%
+  filter(condomain == "Inner") %>%
+  ggplot(aes(x = year, fill = conconstruct))+
+  geom_bar(position="fill") + ylab("prop") + theme_bw() + labs(title="condomain: Inner setting", y="prop")
+
+df_inner <- df %>% 
+    filter(condomain=="Inner")
+conconstruct_labels <- c("Access to knowledge and information",
+                      "Available resources (no subconconstruct)",
+                      "Communications",
+                      "Compatibility",
+                      "Culture (no subconconstruct)",
+                      "Innovation recipients",
+                      "Local conditions",
+                      "Materials & equipment",
+                      "Mission alignment",
+                      "Relational connections",
+                      "Relative priority",
+                      "Structural characteristics (no subconconstruct)",
+                      "Structural characteristics: Information technology infrastructure",
+                      "Structural characteristics: Physical infrastructure",
+                      "Structural characteristics: Work infrastructure")
+df_inner$conconstruct <- factor(df_inner$conconstruct, levels = conconstruct_labels)
+df_inner %>%
+            filter(year == 1) %>% 
+            count(conconstruct) %>%
+            complete(conconstruct = conconstruct_labels, fill = list(n = 0)) %>%
+            mutate(percentage = n / sum(n) * 100) %>%
+            arrange(conconstruct)
+
+df_outer <- df %>% 
+    filter(condomain=="Outer")
+conconstruct_labels <- c("High-level leaders",
+                           "External pressure",
+                           "Local attitudes",
+                           "Local conditions",
+                           "Partnerships & connections",
+                           "Policies & laws")
+
+df_outer %>% 
+    group_by(conconstruct, year) %>%
+    summarise(count = n()) %>%
+    group_by(year) %>%
+    mutate(percentage = count / sum(count) * 100) %>%
+    arrange(year)
+
+df_outer$conconstruct <- factor(df_outer$conconstruct, levels = conconstruct_labels)
+df_outer %>%
+            filter(year == 1) %>% 
+            count(conconstruct) %>%
+            complete(conconstruct = conconstruct_labels, fill = list(n = 0)) %>%
+            mutate(percentage = n / sum(n) * 100) %>%
+            arrange(conconstruct)
+
+df %>%
+  filter(condomain == "Outer") %>%
+  ggplot(aes(x = year, fill = conconstruct))+
+  geom_bar(position="fill") + ylab("prop") + theme_bw() + scale_fill_brewer(palette = "Pastel1") + labs(title="condomain: Outer setting", y="prop")
+
+df_process <- df %>% 
+    filter(condomain=="Process")
+conconstruct_labels <- c("Adaptability",
+                        "Adapting",
+                        "Assessing context",
+                        "Assessing needs",
+                        "Assessing needs: Innovation deliverers",
+                        "Communications",
+                        "Doing",
+                        "Engaging",
+                        "Engaging: Innovation deliverers",
+                        "Innovation recipients",
+                        "Planning",
+                        "Process",
+                        "Reflecting and evaluating",
+                        "Reflecting and evaluating: Implementation",
+                        "Reflecting and evaluating: Innovation",
+                        "Tailoring strategies",
+                        "Teaming")
+df_process$conconstruct <- factor(df_process$conconstruct, levels = conconstruct_labels)
+
+df_outer %>%
+            filter(year == 1) %>% 
+            count(conconstruct) %>%
+            complete(conconstruct = conconstruct_labels, fill = list(n = 0)) %>%
+            mutate(percentage = n / sum(n) * 100) %>%
+            arrange(conconstruct)
+
+## total conconstructs props
+v <- df %>%
+    group_by(condomain, conconstruct) %>%
+    summarise(count = n()) %>%
+    mutate(percentage = (count / nrow(df)) * 100,
+           condomain = first(condomain)) %>%
+    arrange(condomain, conconstruct) %>%
+    print(n = 60)
+write.csv(v, file = "consensusconconstructprop.csv", row.names = TRUE)
+
+## ordered table 
+contable <- df %>%
+    group_by(condomain, conconstruct) %>% 
+    arrange(desc(condomain), desc(conconstruct))
+write.csv(contable, file = "orderedtable_WB061024.csv", row.names = TRUE)
+
+# Sunburst plot
+## create long data set
+df_long <- df %>%
+    group_by(condomain, conconstruct) %>%
+    summarise(count = n()) %>%
+    mutate(percentage = (count / nrow(df)) * 100) %>%
+    arrange(condomain, conconstruct)
+## can use the count_to_sunburst function
+df_long %>% 
+    dplyr::rename(n = percentage) %>% 
+    count(condomain, conconstruct) %>% 
+    count_to_sunburst(sort_by_n = TRUE)
+
+# filter by recs and learnings to count by year
+df_learnings <- df %>%
+    filter(str_detect(Heading, 'learn|Learn|LEARN|Barriers|Suc|Community Academic Partnerships|Innovation|Leadership|lesson|Lesson|Los Angeles & Orange|Riverside University Health Systems Behavioral Health (RUHS BH)|Marketing, Outreach, and Consumer Recruitment') | str_detect(Sub.section, 'learn|Learn|LEARN|Barriers|Outer Context|Key|7 Cups|Mindstrong|Executive Brief|Challenges|Success|Riverside University Health Systems Behavioral Health (RUHS BH)') | str_detect(Section, '^Implementation Evaluation$|Lessons|Learning|less|LEARN|PILOT AND IMPLEMENTATION EVALUATION|County/City Technology, User Experience, and Implementation Evaluation|Spotlight|Riverside County'))
+
+df_learnings <- df_learnings %>%
+  filter(!pmap_lgl(., ~ any(str_detect(c(...), 'Recommendation|solution|Solution|should'))))
+
+df_learnings <- df_learnings %>%
+  filter(!(str_detect(Section, 'Recommendations') & str_detect(Sub.section, 'Recommendations')))
+
+
+df_recs <- df %>% 
+    dplyr::filter(str_detect(Heading, 'rec|Rec|REC|Facilitators|Solutions|Purveyors|Suggestions') | str_detect(Sub.section, 'Rec|rec|Covid 19 Rapid Response|Project Dashboard') | str_detect(Section, 'Rec|rec|REC|System Evaluation') | str_detect(Heading.1, 'should consider|solution|reco|REC'))
+
+df_recs <- df_recs %>%
+  filter(!(str_detect(Sub.section, 'Learn|learn') & str_detect(Heading, 'Learn|learn')))
+
+df_recs <- df_recs %>%
+  filter(!(str_detect(Sub.section, 'Learn|learn') & str_detect(Section, 'Learn|learn')))
+
+df_recs <- df_recs %>%
+  filter(!(str_detect(Section, 'Pilot and Implementation Evaluations')))
+
+df_recs <- df_recs %>%
+  filter(!(str_detect(Section, 'System') & str_detect(Heading, 'Learn|learn')))
+
+
+### this process has been fairly manual so far so we need to check to see which observations were not scooped up in our filtering process then re-assign to our codes above.
+df_not_in_either <- df %>%
+  anti_join(df_learnings, by = c("Report", "Section", "Sub.section", "Heading", "Heading.1", 
+                                 "Domain.Agreement", "Construct.Agreement", "domain", 
+                                 "construct", "Confidence..Notes", "domain2", "construct2", 
+                                 "Confidence..Notes.1", "Consensus.Convo", "condomain", 
+                                 "conconstruct", "year")) %>%
+  anti_join(df_recs, by = c("Report", "Section", "Sub.section", "Heading", "Heading.1", 
+                            "Domain.Agreement", "Construct.Agreement", "domain", 
+                            "construct", "Confidence..Notes", "domain2", "construct2", 
+                            "Confidence..Notes.1", "Consensus.Convo", "condomain", 
+                            "conconstruct", "year"))
+
+
+## Combining both dataframes and identifying duplicates
+combined_df <- bind_rows(df_learnings, df_recs)
+
+# Finding the common observations (duplicates)
+common_observations <- combined_df %>%
+  group_by(across(everything())) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+
+## calcs
+df_learnings %>%
+    group_by(year) %>% 
+    summarise(count = n())
+df_recs %>% 
+    group_by(year) %>% 
+    summarise(count=n())
+
+### visualization
+df_learnings_summary <- df_learnings %>%
+  group_by(year) %>% 
+  summarise(count = n()) %>%
+  mutate(source = "Learnings")
+df_recs_summary <- df_recs %>%
+  group_by(year) %>% 
+  summarise(count = n()) %>%
+  mutate(source = "Recommendations")
+combined_summary <- bind_rows(df_learnings_summary, df_recs_summary)
+
+ggplot(combined_summary, aes(x = year, y = count, color = source, group = source)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Counts by Year for Learnings and Recommendations",
+       x = "Year",
+       y = "Count") +
+  theme_minimal()
+
+```
+
+```{Kappas}
+# Domain agreement is easy
+domainagree <- table(df$domain, df$domain2)
+Kappa(domainagree)
+
+# set up for construct agreement is a bit more difficult
+unique_values <- unique(c(df$construct, df$construct2), incomparables = FALSE)
+df$construct <- factor(df$construct, levels = unique_values)
+df$construct2 <- factor(df$construct2, levels = unique_values)
+constructagree <- table(df$construct, df$construct2)
+Kappa(constructagree)
+
+
+# CODE GRAVEYARD
+df <- df %>%
+  mutate(reportnumber = case_when(
+    Report == "Y1 Q1" ~ "1.1",
+    Report == "Y1 Q2" ~ "1.2",
+    Report == "Y1 Q3" ~ "1.3",
+    Report == "Y1 Q4" ~ "1.4",
+    Report == "1" ~ "1.4",
+    Report == "Y2 Q1" ~ "2.1",
+    Report == "Y2 Q2" ~ "2.2",
+    Report == "Y2 Q3" ~ "2.3",
+    Report == "2" ~ "2.4",
+    Report == "Y3 Mid" ~ "3.2",
+    Report == "3" ~ "3.4",
+    Report == "Y4 Mid" ~ "4.2",
+    Report == "4" ~ "4.4",
+    Report == "Y5 Mid" ~ "5.2",
+    Report == "Y5" ~ "5.4",
+    TRUE ~ NA_character_  # In case there are other values in the Report column
+  ))  
+```
+
